@@ -147,14 +147,6 @@ namespace VirtoCommerce.AzureSearchModule.Data
 
                 var providerRequests = _requestBuilder.BuildRequest(request, indexName, documentType, availableFields, _azureSearchOptions.QueryParserType);
 
-                // If semantic/vector settings are enabled and the index has an embedding field,
-                // use service-side vectorization for the *query* text (VectorizableTextQuery).
-                // Note: This does not vectorize documents during upload; document embeddings must exist in the index.
-                foreach (var providerRequest in providerRequests)
-                {
-                    TryApplyVectorizableTextQuery(request, providerRequest, availableFields);
-                }
-
                 var providerResponses = await Task.WhenAll(providerRequests.Select(r => searchClient.SearchAsync<SearchDocument>(r.SearchText, r.SearchOptions)));
 
                 // Copy aggregation ID from request to response
@@ -173,60 +165,6 @@ namespace VirtoCommerce.AzureSearchModule.Data
             {
                 throw new SearchException(ex.Message, ex);
             }
-        }
-
-        private void TryApplyVectorizableTextQuery(SearchRequest request, AzureSearchRequest providerRequest, IList<SearchField> availableFields)
-        {
-            if (providerRequest?.SearchOptions == null)
-            {
-                return;
-            }
-
-            // Only vectorize if semantic feature is enabled and Azure OpenAI endpoint configured.
-            if (!_settingsManager.GetSemanticEnabled() || string.IsNullOrWhiteSpace(_azureSearchOptions.AzureOpenAI.Endpoint))
-            {
-                return;
-            }
-
-            var queryText = providerRequest.SearchText;
-            if (string.IsNullOrWhiteSpace(queryText))
-            {
-                return;
-            }
-
-            var semanticLanguage = _settingsManager.GetSemanticPrimaryLanguage()?.ToLowerInvariant();
-            if (string.IsNullOrWhiteSpace(semanticLanguage))
-            {
-                return;
-            }
-
-            var embeddingFieldName = $"content_{semanticLanguage.Replace("-", "_")}_embedding";
-            var embeddingFieldExists = availableFields?.Any(f => f.Name.EqualsIgnoreCase(embeddingFieldName)) == true;
-            if (!embeddingFieldExists)
-            {
-                return;
-            }
-
-            // Add a vectorizable text query; Azure AI Search will vectorize the query using the vectorizer
-            // configured in the vector search profile for this embedding field.
-            providerRequest.SearchOptions.VectorSearch ??= new VectorSearchOptions();
-
-            // Make sure we don't duplicate vector queries if called multiple times.
-            if (providerRequest.SearchOptions.VectorSearch.Queries.OfType<VectorizableTextQuery>().Any(q => q.Text == queryText && q.Fields.Contains(embeddingFieldName)))
-            {
-                return;
-            }
-
-            var knn = request?.Take > 0 ? request.Take : 10;
-            knn = Math.Max(knn, 10);
-
-            var vectorQuery = new VectorizableTextQuery(queryText)
-            {
-                KNearestNeighborsCount = knn,
-            };
-
-            vectorQuery.Fields.Add(embeddingFieldName);
-            providerRequest.SearchOptions.VectorSearch.Queries.Add(vectorQuery);
         }
 
         public async Task<SuggestionResponse> GetSuggestionsAsync(string documentType, SuggestionRequest request)
@@ -876,7 +814,7 @@ namespace VirtoCommerce.AzureSearchModule.Data
                     Vectorizers = { vectorizer }
                 };
 
-                var embeddingFieldName = $"content_{semanticLanguage.Replace("-", "_")}_embedding";
+                var embeddingFieldName = $"{semanticContentFieldName}_embedding";
                 if (!index.Fields.Any(f => f.Name.EqualsIgnoreCase(embeddingFieldName)))
                 {
                     index.Fields.Add(new SearchField(embeddingFieldName, SearchFieldDataType.Collection(SearchFieldDataType.Single))
