@@ -48,6 +48,7 @@ namespace VirtoCommerce.AzureSearchModule.Data
         private readonly ISettingsManager _settingsManager;
         private readonly IAzureSearchDocumentsRequestBuilder _requestBuilder;
         private readonly IAzureSearchDocumentsResponseBuilder _responseBuilder;
+        private readonly IEmbeddingService _embeddingService;
         private readonly ILogger<AzureSearchDocumentsProvider> _logger;
 
         public AzureSearchDocumentsProvider(
@@ -56,6 +57,7 @@ namespace VirtoCommerce.AzureSearchModule.Data
             ISettingsManager settingsManager,
             IAzureSearchDocumentsRequestBuilder requestBuilder,
             IAzureSearchDocumentsResponseBuilder responseBuilder,
+            IEmbeddingService embeddingService,
             ILogger<AzureSearchDocumentsProvider> logger)
         {
             _azureSearchOptions = azureSearchOptions.Value;
@@ -63,6 +65,7 @@ namespace VirtoCommerce.AzureSearchModule.Data
             _settingsManager = settingsManager;
             _requestBuilder = requestBuilder;
             _responseBuilder = responseBuilder;
+            _embeddingService = embeddingService;
             _azureKeyCredential = new AzureKeyCredential(_azureSearchOptions.Key);
             _logger = logger;
         }
@@ -315,7 +318,9 @@ namespace VirtoCommerce.AzureSearchModule.Data
 
             var providerDocuments = documents.Select(document => ConvertToProviderDocument(document, providerFields, documentType)).ToList();
 
-            var updateMapping = !parameters.PartialUpdate && providerFields.Count != oldFieldsCount;
+            var semanticSearchEnabled = TryGetSemanticEmbeddingFieldNames(providerFields, out var semanticContentFieldName, out var embeddingFieldName);
+            var requiresEmbeddingField = semanticSearchEnabled && !providerFields.Any(f => f.Name.EqualsIgnoreCase(embeddingFieldName));
+            var updateMapping = (!parameters.PartialUpdate && providerFields.Count != oldFieldsCount) || requiresEmbeddingField;
 
             var indexExits = await IndexExistsAsync(indexName);
 
@@ -338,6 +343,11 @@ namespace VirtoCommerce.AzureSearchModule.Data
             if (updateMapping)
             {
                 await UpdateMapping(indexName, providerFields);
+            }
+
+            if (semanticSearchEnabled)
+            {
+                await AddEmbeddingsAsync(providerDocuments, semanticContentFieldName, embeddingFieldName);
             }
 
             return new CreateIndexResult
@@ -737,12 +747,7 @@ namespace VirtoCommerce.AzureSearchModule.Data
         {
             var minGram = _settingsManager.GetMinGram();
             var maxGram = _settingsManager.GetMaxGram();
-            var semanticLanguage = _settingsManager.GetSemanticPrimaryLanguage().ToLower();
-            var semanticContentFieldName = $"f___content_{semanticLanguage.Replace("-", "_")}";
-            var semanticContentField = providerFields.FirstOrDefault(f => f.Name.EqualsIgnoreCase(semanticContentFieldName));
-            var semanticContentFieldSupported = semanticContentField?.IsSearchable == true && semanticContentField?.IsHidden != true;
-            var semanticEndpointConfigured = !string.IsNullOrWhiteSpace(_azureSearchOptions.AzureOpenAI.Endpoint);
-            var semanticSearchEnabled = _settingsManager.GetSemanticEnabled() && semanticContentFieldSupported && semanticEndpointConfigured;
+            var semanticSearchEnabled = TryGetSemanticEmbeddingFieldNames(providerFields, out var semanticContentFieldName, out var embeddingFieldName);
             //var agenticSearchEnabled = _settingsManager.GetAgenticEnabled();
 
             var index = new SearchIndex(indexName)
@@ -814,7 +819,6 @@ namespace VirtoCommerce.AzureSearchModule.Data
                     Vectorizers = { vectorizer }
                 };
 
-                var embeddingFieldName = $"{semanticContentFieldName}_embedding";
                 if (!index.Fields.Any(f => f.Name.EqualsIgnoreCase(embeddingFieldName)))
                 {
                     index.Fields.Add(new SearchField(embeddingFieldName, SearchFieldDataType.Collection(SearchFieldDataType.Single))
@@ -844,6 +848,113 @@ namespace VirtoCommerce.AzureSearchModule.Data
 
 
             return index;
+        }
+
+        private bool TryGetSemanticEmbeddingFieldNames(IList<SearchField> providerFields, out string semanticContentFieldName, out string embeddingFieldName)
+        {
+            semanticContentFieldName = null;
+            embeddingFieldName = null;
+
+            var semanticLanguage = _settingsManager.GetSemanticPrimaryLanguage();
+            if (string.IsNullOrWhiteSpace(semanticLanguage))
+            {
+                return false;
+            }
+
+            semanticContentFieldName = $"f___content_{semanticLanguage.ToLowerInvariant().Replace("-", "_")}";
+            embeddingFieldName = $"{semanticContentFieldName}_embedding";
+
+            var contentFieldName = semanticContentFieldName;
+            var semanticContentField = providerFields?.FirstOrDefault(f => f.Name.EqualsIgnoreCase(contentFieldName));
+            var semanticContentFieldSupported = semanticContentField?.IsSearchable == true && semanticContentField?.IsHidden != true;
+            var semanticEndpointConfigured = !string.IsNullOrWhiteSpace(_azureSearchOptions.AzureOpenAI?.Endpoint);
+
+            return _settingsManager.GetSemanticEnabled() && semanticContentFieldSupported && semanticEndpointConfigured;
+        }
+
+        private async Task AddEmbeddingsAsync(IList<SearchDocument> providerDocuments, string semanticContentFieldName, string embeddingFieldName)
+        {
+            if (_embeddingService == null || providerDocuments == null || providerDocuments.Count == 0)
+            {
+                return;
+            }
+
+            var documentsToEmbed = new List<(SearchDocument Document, string Text)>();
+            foreach (var document in providerDocuments)
+            {
+                if (TryGetContentText(document, semanticContentFieldName, out var text))
+                {
+                    documentsToEmbed.Add((document, text));
+                }
+            }
+
+            if (documentsToEmbed.Count == 0)
+            {
+                return;
+            }
+
+            var batchSize = Math.Max(1, _settingsManager.GetSemanticEmbeddingBatchSize());
+
+            for (var i = 0; i < documentsToEmbed.Count; i += batchSize)
+            {
+                var batch = documentsToEmbed.Skip(i).Take(batchSize).ToList();
+                IReadOnlyList<ReadOnlyMemory<float>> embeddings;
+
+                try
+                {
+                    embeddings = await _embeddingService.GetEmbeddingsAsync(batch.Select(item => item.Text));
+                }
+                catch (Exception ex)
+                {
+                    throw new SearchException("Failed to generate embeddings.", ex);
+                }
+
+                if (embeddings.Count != batch.Count)
+                {
+                    throw new SearchException("Embedding response size mismatch.", null);
+                }
+
+                for (var index = 0; index < batch.Count; index++)
+                {
+                    batch[index].Document[embeddingFieldName] = embeddings[index].ToArray();
+                }
+            }
+        }
+
+        private static bool TryGetContentText(SearchDocument document, string fieldName, out string text)
+        {
+            text = null;
+
+            if (document == null || string.IsNullOrWhiteSpace(fieldName))
+            {
+                return false;
+            }
+
+            if (!document.TryGetValue(fieldName, out var value) || value == null)
+            {
+                return false;
+            }
+
+            switch (value)
+            {
+                case string stringValue:
+                    text = stringValue;
+                    break;
+                case string[] stringArray:
+                    text = string.Join(' ', stringArray);
+                    break;
+                case IEnumerable<string> stringEnumerable:
+                    text = string.Join(' ', stringEnumerable);
+                    break;
+                case object[] objectArray:
+                    text = string.Join(' ', objectArray.Where(item => item != null));
+                    break;
+                default:
+                    text = value.ToString();
+                    break;
+            }
+
+            return !string.IsNullOrWhiteSpace(text);
         }
 
         #endregion

@@ -15,6 +15,14 @@
                     "description": "Il numero massimo di caratteri in un gram. Ciò richiede la ricostruzione dell'indice"
                 }
             }
-        }
+            },
+            "Semantic": {
+                "Vectorizer": {
+                    "EmbeddingBatchSize": {
+                        "title": "Embedding batch size",
+                        "description": "Number of documents per embedding request"
+                    }
+                }
+            }
     }
 }

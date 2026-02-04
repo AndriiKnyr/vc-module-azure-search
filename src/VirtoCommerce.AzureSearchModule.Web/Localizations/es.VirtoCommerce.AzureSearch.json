@@ -14,6 +14,14 @@
                     "title": "Longitud máxima de gramática",
                     "description": "El número máximo de caracteres en un gramático. Esto requiere reconstruir el índice"
                 }
+            },
+            "Semantic": {
+                "Vectorizer": {
+                    "EmbeddingBatchSize": {
+                        "title": "Embedding batch size",
+                        "description": "Number of documents per embedding request"
+                    }
+                }
             }
         }
     }

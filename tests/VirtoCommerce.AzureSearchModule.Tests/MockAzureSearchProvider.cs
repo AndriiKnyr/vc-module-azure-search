@@ -19,8 +19,9 @@ namespace VirtoCommerce.AzureSearchModule.Tests
             IOptions<SearchOptions> searchOptions,
             ISettingsManager settingsManager,
             IAzureSearchDocumentsRequestBuilder requestBuilder,
-            IAzureSearchDocumentsResponseBuilder responseBuilder) :
-            base(azureSearchOptions, searchOptions, settingsManager, requestBuilder, responseBuilder, null)
+            IAzureSearchDocumentsResponseBuilder responseBuilder,
+            IEmbeddingService embeddingService) :
+            base(azureSearchOptions, searchOptions, settingsManager, requestBuilder, responseBuilder, embeddingService, null)
         {
             IsIndexExistsAsyncCalled = false;
         }

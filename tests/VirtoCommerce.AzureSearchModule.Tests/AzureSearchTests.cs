@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Moq;
 using VirtoCommerce.AzureSearchModule.Data;
 using VirtoCommerce.SearchModule.Core.Model;
 using VirtoCommerce.SearchModule.Core.Services;
@@ -36,15 +37,17 @@ namespace VirtoCommerce.AzureSearchModule.Tests
 
             var loggerFactory = LoggerFactory.Create(builder => { builder.ClearProviders(); });
             var logger = loggerFactory.CreateLogger<AzureSearchDocumentsProvider>();
+            var embeddingService = new Mock<IEmbeddingService>().Object;
 
-            var provider = new AzureSearchDocumentsProvider(azureSearchOptions, options, GetSettingsManager(), _requestBuilder, _responseBuilder, logger);
+            var provider = new AzureSearchDocumentsProvider(azureSearchOptions, options, GetSettingsManager(), _requestBuilder, _responseBuilder, embeddingService, logger);
             return provider;
         }
 
         [Fact]
         public virtual async Task CheckCallIsIndexExists()
         {
-            var provider = new MockAzureSearchProvider(GetAzureSearchOptions(), GetSearchOptions(), GetSettingsManager(), _requestBuilder, _responseBuilder);
+            var embeddingService = new Mock<IEmbeddingService>().Object;
+            var provider = new MockAzureSearchProvider(GetAzureSearchOptions(), GetSearchOptions(), GetSettingsManager(), _requestBuilder, _responseBuilder, embeddingService);
 
             Assert.Null(provider.CallGetMappingFromCache());
 

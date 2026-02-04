@@ -14,6 +14,14 @@
           "title": "Största gramlängd",
           "description": "Största antal tecken i en gram. Detta kräver ombyggnad av indexet"
         }
+      },
+      "Semantic": {
+        "Vectorizer": {
+          "EmbeddingBatchSize": {
+            "title": "Embedding batch size",
+            "description": "Number of documents per embedding request"
+          }
+        }
       }
     }
   }

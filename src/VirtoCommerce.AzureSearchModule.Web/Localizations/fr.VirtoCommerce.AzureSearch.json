@@ -14,6 +14,14 @@
                     "title": "Longueur maximale de gramme",
                     "description": "Le nombre maximum de caractères dans un gramme. Cela nécessite de reconstruire l'index"
                 }
+            },
+            "Semantic": {
+                "Vectorizer": {
+                    "EmbeddingBatchSize": {
+                        "title": "Embedding batch size",
+                        "description": "Number of documents per embedding request"
+                    }
+                }
             }
         }
     }

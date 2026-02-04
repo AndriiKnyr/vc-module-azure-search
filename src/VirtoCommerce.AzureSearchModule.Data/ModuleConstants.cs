@@ -112,6 +112,14 @@ namespace VirtoCommerce.AzureSearchModule.Data
                     DefaultValue = 3072,
                 };
 
+                public static SettingDescriptor EmbeddingBatchSize { get; } = new()
+                {
+                    Name = "VirtoCommerce.Search.AzureSearch.Semantic.Vectorizer.EmbeddingBatchSize",
+                    GroupName = "Search|Azure Search|Vectorizer",
+                    ValueType = SettingValueType.Integer,
+                    DefaultValue = 16,
+                };
+
                 public static IEnumerable<SettingDescriptor> AllVectorizerSettings
                 {
                     get
@@ -119,6 +127,7 @@ namespace VirtoCommerce.AzureSearchModule.Data
                         yield return EmbeddingModel;
                         yield return EmbeddingDeployment;
                         yield return EmbeddingDimensions;
+                        yield return EmbeddingBatchSize;
                     }
                 }
             }

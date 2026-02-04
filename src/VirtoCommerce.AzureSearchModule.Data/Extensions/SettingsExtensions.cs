@@ -62,6 +62,11 @@ namespace VirtoCommerce.AzureSearchModule.Data.Extensions
             return settingsManager.GetValue<int>(ModuleConstants.Settings.Vectorizer.EmbeddingDimensions);
         }
 
+        public static int GetSemanticEmbeddingBatchSize(this ISettingsManager settingsManager)
+        {
+            return settingsManager.GetValue<int>(ModuleConstants.Settings.Vectorizer.EmbeddingBatchSize);
+        }
+
         public static string GetSemanticVectorizerEmbeddingModel(this ISettingsManager settingsManager)
         {
             return settingsManager.GetSemanticEmbeddingModel();
