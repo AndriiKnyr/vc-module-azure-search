@@ -21,6 +21,7 @@ namespace VirtoCommerce.AzureSearchModule.Web
                 serviceCollection.Configure<AzureSearchOptions>(Configuration.GetSection($"Search:{ModuleConstants.ProviderName}"));
                 serviceCollection.AddSingleton<IAzureSearchDocumentsRequestBuilder, AzureSearchDocumentsRequestBuilder>();
                 serviceCollection.AddSingleton<IAzureSearchDocumentsResponseBuilder, AzureSearchDocumentsResponseBuilder>();
+                serviceCollection.AddSingleton<IEmbeddingService, AzureOpenAiEmbeddingService>();
                 serviceCollection.AddSingleton<AzureSearchDocumentsProvider>();
             }
         }
