@@ -350,6 +350,18 @@ namespace VirtoCommerce.AzureSearchModule.Data
                 await AddEmbeddingsAsync(providerDocuments, semanticContentFieldName, embeddingFieldName);
             }
 
+            if (semanticSearchEnabled && _settingsManager.GetAgenticEnabled())
+            {
+                try
+                {
+                    await CreateKnowledgeSourceAndBaseAsync(documentType, indexName, semanticContentFieldName);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Agentic knowledge base creation failed. DocumentType: {DocumentType}", documentType);
+                }
+            }
+
             return new CreateIndexResult
             {
                 IndexName = indexName,
@@ -748,7 +760,6 @@ namespace VirtoCommerce.AzureSearchModule.Data
             var minGram = _settingsManager.GetMinGram();
             var maxGram = _settingsManager.GetMaxGram();
             var semanticSearchEnabled = TryGetSemanticEmbeddingFieldNames(providerFields, out var semanticContentFieldName, out var embeddingFieldName);
-            //var agenticSearchEnabled = _settingsManager.GetAgenticEnabled();
 
             var index = new SearchIndex(indexName)
             {
@@ -955,6 +966,58 @@ namespace VirtoCommerce.AzureSearchModule.Data
             }
 
             return !string.IsNullOrWhiteSpace(text);
+        }
+
+        private async Task CreateKnowledgeSourceAndBaseAsync(string documentType, string indexAlias, string semanticContentFieldName)
+        {
+            if (string.IsNullOrWhiteSpace(_azureSearchOptions.AzureOpenAI?.Endpoint))
+            {
+                return;
+            }
+
+            var indexName = await GetIndexNameAsync(indexAlias) ?? indexAlias;
+            if (string.IsNullOrWhiteSpace(indexName))
+            {
+                return;
+            }
+
+            var knowledgeSourceName = $"{indexAlias}-knowledge-source".ToLowerInvariant();
+            var knowledgeBaseName = $"{indexAlias}-knowledge-base".ToLowerInvariant();
+
+            var indexKnowledgeSource = new SearchIndexKnowledgeSource(
+                name: knowledgeSourceName,
+                searchIndexParameters: new SearchIndexKnowledgeSourceParameters(searchIndexName: indexName)
+                {
+                    SourceDataFields =
+                    {
+                        new SearchIndexFieldReference(name: AzureSearchHelper.KeyFieldName),
+                        new SearchIndexFieldReference(name: semanticContentFieldName),
+                    }
+                }
+            );
+
+            await Client.CreateOrUpdateKnowledgeSourceAsync(indexKnowledgeSource);
+
+            var openAiParameters = new AzureOpenAIVectorizerParameters
+            {
+                ResourceUri = new Uri(_azureSearchOptions.AzureOpenAI.Endpoint),
+                ApiKey = _azureSearchOptions.AzureOpenAI.Key,
+                DeploymentName = _settingsManager.GetAgenticKnowledgeBaseDeployment(),
+                ModelName = _settingsManager.GetAgenticKnowledgeBaseModel(),
+            };
+
+            var model = new KnowledgeBaseAzureOpenAIModel(azureOpenAIParameters: openAiParameters);
+
+            var knowledgeBase = new KnowledgeBase(
+                name: knowledgeBaseName,
+                knowledgeSources: new KnowledgeSourceReference[] { new KnowledgeSourceReference(knowledgeSourceName) }
+            )
+            {
+                AnswerInstructions = "Provide a two sentence concise and informative answer based on the retrieved documents.",
+                Models = { model }
+            };
+
+            await Client.CreateOrUpdateKnowledgeBaseAsync(knowledgeBase);
         }
 
         #endregion

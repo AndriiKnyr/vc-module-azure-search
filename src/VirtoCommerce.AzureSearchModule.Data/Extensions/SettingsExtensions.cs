@@ -86,6 +86,23 @@ namespace VirtoCommerce.AzureSearchModule.Data.Extensions
         {
             return settingsManager.GetValue<bool>(ModuleConstants.Settings.Agentic.Enabled);
         }
-        
+
+        public static string GetAgenticKnowledgeBaseModel(this ISettingsManager settingsManager)
+        {
+            var model = settingsManager.GetValue<string>(ModuleConstants.Settings.Agentic.KnowledgeBaseModel);
+
+            return string.IsNullOrWhiteSpace(model)
+                ? settingsManager.GetSemanticVectorizerEmbeddingModel()
+                : model;
+        }
+
+        public static string GetAgenticKnowledgeBaseDeployment(this ISettingsManager settingsManager)
+        {
+            var deployment = settingsManager.GetValue<string>(ModuleConstants.Settings.Agentic.KnowledgeBaseDeployment);
+
+            return string.IsNullOrWhiteSpace(deployment)
+                ? settingsManager.GetSemanticVectorizerEmbeddingDeployment()
+                : deployment;
+        }
     }
 }

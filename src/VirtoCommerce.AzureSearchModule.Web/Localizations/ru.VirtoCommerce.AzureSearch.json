@@ -22,6 +22,16 @@
                         "description": "Number of documents per embedding request"
                     }
                 }
+            },
+            "Agentic": {
+                "Model": {
+                    "title": "Knowledge base model",
+                    "description": "Azure OpenAI model name for agentic knowledge base"
+                },
+                "Deployment": {
+                    "title": "Knowledge base deployment",
+                    "description": "Azure OpenAI deployment name for agentic knowledge base"
+                }
             }
         }
     }

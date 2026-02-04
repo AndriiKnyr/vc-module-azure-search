@@ -142,11 +142,29 @@ namespace VirtoCommerce.AzureSearchModule.Data
                     DefaultValue = false,
                 };
 
+                public static SettingDescriptor KnowledgeBaseModel { get; } = new()
+                {
+                    Name = "VirtoCommerce.Search.AzureSearch.Agentic.Model",
+                    GroupName = "Search|Azure Search|Agentic",
+                    ValueType = SettingValueType.ShortText,
+                    DefaultValue = string.Empty,
+                };
+
+                public static SettingDescriptor KnowledgeBaseDeployment { get; } = new()
+                {
+                    Name = "VirtoCommerce.Search.AzureSearch.Agentic.Deployment",
+                    GroupName = "Search|Azure Search|Agentic",
+                    ValueType = SettingValueType.ShortText,
+                    DefaultValue = string.Empty,
+                };
+
                 public static IEnumerable<SettingDescriptor> AllAgenticSettings
                 {
                     get
                     {
                         yield return Enabled;
+                        yield return KnowledgeBaseModel;
+                        yield return KnowledgeBaseDeployment;
                     }
                 }
             }
