@@ -118,13 +118,9 @@ namespace VirtoCommerce.AzureSearchModule.Data
                 var indexName = GetIndexName(ActiveIndexAlias, documentType);
 
                 var providerDocuments = documents.Select(document => ConvertToProviderDocument(document, null, documentType)).ToList();
-
-                var batch = IndexDocumentsBatch.Delete(providerDocuments);
-
                 var indexClient = GetSearchIndexClient(indexName);
-                var response = await indexClient.IndexDocumentsAsync(batch);
 
-                result = CreateIndexingResult(response.Value.Results);
+                result = await ExecuteBufferedIndexingAsync(indexClient, providerDocuments, BufferedIndexAction.Delete);
             }
             catch (RequestFailedException ex)
             {
@@ -150,6 +146,15 @@ namespace VirtoCommerce.AzureSearchModule.Data
                 var searchClient = GetSearchIndexClient(indexName);
 
                 var providerRequests = _requestBuilder.BuildRequest(request, indexName, documentType, availableFields, _azureSearchOptions.QueryParserType);
+
+                // If semantic/vector settings are enabled and the index has an embedding field,
+                // use service-side vectorization for the *query* text (VectorizableTextQuery).
+                // Note: This does not vectorize documents during upload; document embeddings must exist in the index.
+                foreach (var providerRequest in providerRequests)
+                {
+                    TryApplyVectorizableTextQuery(request, providerRequest, availableFields);
+                }
+
                 var providerResponses = await Task.WhenAll(providerRequests.Select(r => searchClient.SearchAsync<SearchDocument>(r.SearchText, r.SearchOptions)));
 
                 // Copy aggregation ID from request to response
@@ -168,6 +173,60 @@ namespace VirtoCommerce.AzureSearchModule.Data
             {
                 throw new SearchException(ex.Message, ex);
             }
+        }
+
+        private void TryApplyVectorizableTextQuery(SearchRequest request, AzureSearchRequest providerRequest, IList<SearchField> availableFields)
+        {
+            if (providerRequest?.SearchOptions == null)
+            {
+                return;
+            }
+
+            // Only vectorize if semantic feature is enabled and Azure OpenAI endpoint configured.
+            if (!_settingsManager.GetSemanticEnabled() || string.IsNullOrWhiteSpace(_azureSearchOptions.AzureOpenAI.Endpoint))
+            {
+                return;
+            }
+
+            var queryText = providerRequest.SearchText;
+            if (string.IsNullOrWhiteSpace(queryText))
+            {
+                return;
+            }
+
+            var semanticLanguage = _settingsManager.GetSemanticPrimaryLanguage()?.ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(semanticLanguage))
+            {
+                return;
+            }
+
+            var embeddingFieldName = $"content_{semanticLanguage.Replace("-", "_")}_embedding";
+            var embeddingFieldExists = availableFields?.Any(f => f.Name.EqualsIgnoreCase(embeddingFieldName)) == true;
+            if (!embeddingFieldExists)
+            {
+                return;
+            }
+
+            // Add a vectorizable text query; Azure AI Search will vectorize the query using the vectorizer
+            // configured in the vector search profile for this embedding field.
+            providerRequest.SearchOptions.VectorSearch ??= new VectorSearchOptions();
+
+            // Make sure we don't duplicate vector queries if called multiple times.
+            if (providerRequest.SearchOptions.VectorSearch.Queries.OfType<VectorizableTextQuery>().Any(q => q.Text == queryText && q.Fields.Contains(embeddingFieldName)))
+            {
+                return;
+            }
+
+            var knn = request?.Take > 0 ? request.Take : 10;
+            knn = Math.Max(knn, 10);
+
+            var vectorQuery = new VectorizableTextQuery(queryText)
+            {
+                KNearestNeighborsCount = knn,
+            };
+
+            vectorQuery.Fields.Add(embeddingFieldName);
+            providerRequest.SearchOptions.VectorSearch.Queries.Add(vectorQuery);
         }
 
         public async Task<SuggestionResponse> GetSuggestionsAsync(string documentType, SuggestionRequest request)
@@ -527,16 +586,15 @@ namespace VirtoCommerce.AzureSearchModule.Data
 
             IndexingResult result = null;
 
-            var batch = partialUpdate ? IndexDocumentsBatch.MergeOrUpload(providerDocuments) : IndexDocumentsBatch.Upload(providerDocuments);
             var indexClient = GetSearchIndexClient(indexName);
+            var action = partialUpdate ? BufferedIndexAction.MergeOrUpload : BufferedIndexAction.Upload;
 
             // Retry if cannot index documents after updating the mapping
             for (var i = retryCount - 1; i >= 0; i--)
             {
                 try
                 {
-                    var response = await indexClient.IndexDocumentsAsync(batch);
-                    result = CreateIndexingResult(response.Value.Results);
+                    result = await ExecuteBufferedIndexingAsync(indexClient, providerDocuments, action);
                     break;
                 }
                 catch (RequestFailedException exception)
@@ -553,6 +611,88 @@ namespace VirtoCommerce.AzureSearchModule.Data
             }
 
             return result;
+        }
+
+        private enum BufferedIndexAction
+        {
+            Upload,
+            MergeOrUpload,
+            Delete,
+        }
+
+        private async Task<IndexingResult> ExecuteBufferedIndexingAsync(SearchClient indexClient, IList<SearchDocument> providerDocuments, BufferedIndexAction action)
+        {
+            var results = new ConcurrentBag<IndexingResultItem>();
+            Exception actionFailedException = null;
+            var sender = CreateBufferedSender(indexClient);
+
+            sender.ActionCompleted += eventArgs =>
+            {
+                results.Add(new IndexingResultItem
+                {
+                    Id = eventArgs.Result.Key,
+                    Succeeded = eventArgs.Result.Succeeded,
+                    ErrorMessage = eventArgs.Result.ErrorMessage,
+                });
+
+                return Task.CompletedTask;
+            };
+
+            sender.ActionFailed += eventArgs =>
+            {
+                actionFailedException ??= eventArgs.Exception;
+                _logger.LogError(eventArgs.Exception, "Buffered indexing action failed.");
+
+                return Task.CompletedTask;
+            };
+
+            switch (action)
+            {
+                case BufferedIndexAction.Upload:
+                    await sender.UploadDocumentsAsync(providerDocuments);
+                    break;
+                case BufferedIndexAction.MergeOrUpload:
+                    await sender.MergeOrUploadDocumentsAsync(providerDocuments);
+                    break;
+                case BufferedIndexAction.Delete:
+                    await sender.DeleteDocumentsAsync(providerDocuments);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(action), action, "Unsupported buffered indexing action.");
+            }
+
+            await sender.FlushAsync();
+
+            if (actionFailedException != null)
+            {
+                throw actionFailedException;
+            }
+
+            return new IndexingResult { Items = results.ToArray() };
+        }
+
+        private SearchIndexingBufferedSender<SearchDocument> CreateBufferedSender(SearchClient indexClient)
+        {
+            return new SearchIndexingBufferedSender<SearchDocument>(
+                indexClient,
+                new SearchIndexingBufferedSenderOptions<SearchDocument>
+                {
+                    KeyFieldAccessor = GetDocumentKey,
+                    AutoFlush = true,
+                    InitialBatchActionCount = 512,
+                });
+        }
+
+        private static string GetDocumentKey(SearchDocument document)
+        {
+            if (document == null)
+            {
+                return null;
+            }
+
+            return document.TryGetValue(AzureSearchHelper.KeyFieldName, out var keyValue)
+                ? keyValue?.ToString()
+                : null;
         }
 
         protected virtual IndexingResult CreateIndexingResult(IReadOnlyList<Azure.Search.Documents.Models.IndexingResult> results)
@@ -659,6 +799,13 @@ namespace VirtoCommerce.AzureSearchModule.Data
         {
             var minGram = _settingsManager.GetMinGram();
             var maxGram = _settingsManager.GetMaxGram();
+            var semanticLanguage = _settingsManager.GetSemanticPrimaryLanguage().ToLower();
+            var semanticContentFieldName = $"f___content_{semanticLanguage.Replace("-", "_")}";
+            var semanticContentField = providerFields.FirstOrDefault(f => f.Name.EqualsIgnoreCase(semanticContentFieldName));
+            var semanticContentFieldSupported = semanticContentField?.IsSearchable == true && semanticContentField?.IsHidden != true;
+            var semanticEndpointConfigured = !string.IsNullOrWhiteSpace(_azureSearchOptions.AzureOpenAI.Endpoint);
+            var semanticSearchEnabled = _settingsManager.GetSemanticEnabled() && semanticContentFieldSupported && semanticEndpointConfigured;
+            //var agenticSearchEnabled = _settingsManager.GetAgenticEnabled();
 
             var index = new SearchIndex(indexName)
             {
@@ -692,6 +839,71 @@ namespace VirtoCommerce.AzureSearchModule.Data
                 var suggester = new SearchSuggester(SuggesterName, suggestSourceFields);
                 index.Suggesters.Add(suggester);
             }
+
+            if (semanticSearchEnabled)
+            {
+                var vectorizerName = _settingsManager.GetSemanticVectorizerEmbeddingDeployment().Replace("-", "_");
+                var vectorizer = new AzureOpenAIVectorizer(vectorizerName)
+                {
+                    Parameters = new AzureOpenAIVectorizerParameters
+                    {
+                        ResourceUri = new Uri(_azureSearchOptions.AzureOpenAI.Endpoint),
+                        ApiKey = _azureSearchOptions.AzureOpenAI.Key,
+                        DeploymentName = _settingsManager.GetSemanticVectorizerEmbeddingDeployment(),
+                        ModelName = _settingsManager.GetSemanticVectorizerEmbeddingModel(),
+                    }
+                };
+
+                var vectorSearchProfileName = $"hnsw_{vectorizerName}";
+                var vectorSearch = new VectorSearch
+                {
+                    Profiles =
+                    {
+                        new VectorSearchProfile(
+                            name: vectorSearchProfileName,
+                            algorithmConfigurationName: "alg"
+                        ) 
+                        { 
+                            VectorizerName = vectorizerName  
+                        }
+                    },
+                    
+                    Algorithms = 
+                    { 
+                        new HnswAlgorithmConfiguration(name: "alg") 
+                    },
+                    
+                    Vectorizers = { vectorizer }
+                };
+
+                var embeddingFieldName = $"content_{semanticLanguage.Replace("-", "_")}_embedding";
+                if (!index.Fields.Any(f => f.Name.EqualsIgnoreCase(embeddingFieldName)))
+                {
+                    index.Fields.Add(new SearchField(embeddingFieldName, SearchFieldDataType.Collection(SearchFieldDataType.Single))
+                    {
+                        VectorSearchDimensions = _settingsManager.GetSemanticVectorizerEmbeddingDimensions(),
+                        VectorSearchProfileName = vectorSearchProfileName,
+                    });
+                }
+
+                var semanticConfig = new SemanticConfiguration(
+                    name: "semantic_config",
+                    prioritizedFields: new SemanticPrioritizedFields
+                    {
+                        ContentFields = { new SemanticField(semanticContentFieldName) } 
+                    }
+                );
+
+                var semanticSearch = new SemanticSearch()
+                {
+                    DefaultConfigurationName = "semantic_config",
+                    Configurations = { semanticConfig }
+                };
+
+                index.VectorSearch = vectorSearch;
+                index.SemanticSearch = semanticSearch;
+            }
+
 
             return index;
         }

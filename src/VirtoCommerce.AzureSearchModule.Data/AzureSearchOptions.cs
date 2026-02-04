@@ -7,6 +7,7 @@ namespace VirtoCommerce.AzureSearchModule.Data
         public string Endpoint { get; set; }
         public string SearchServiceName { get; set; }
         public string Key { get; set; }
+        public AzureOpenAIOptions AzureOpenAI { get; set; } = new();
 
         /// <summary>
         /// Azure Cognitive Search supports two Lucene-based query languages: Simple and Full.
@@ -14,5 +15,11 @@ namespace VirtoCommerce.AzureSearchModule.Data
         /// <seealso cref="https://learn.microsoft.com/en-us/azure/search/query-simple-syntax"/>
         /// <seealso cref="https://learn.microsoft.com/en-us/azure/search/search-query-lucene-examples"/>
         public SearchQueryType QueryParserType { get; set; } = SearchQueryType.Simple;
+    }
+
+    public class AzureOpenAIOptions
+    {
+        public string Endpoint { get; set; } = string.Empty;
+        public string Key { get; set; } = string.Empty;
     }
 }
