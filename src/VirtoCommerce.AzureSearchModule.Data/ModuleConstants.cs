@@ -142,6 +142,31 @@ namespace VirtoCommerce.AzureSearchModule.Data
                     DefaultValue = false,
                 };
 
+                public static SettingDescriptor KnowledgeBaseDescription { get; } = new()
+                {
+                    Name = "VirtoCommerce.Search.AzureSearch.Agentic.KnowledgeBase.Description",
+                    GroupName = "Search|Azure Search|Agentic",
+                    ValueType = SettingValueType.ShortText,
+                    DefaultValue = string.Empty,
+                };
+
+                public static SettingDescriptor KnowledgeBaseRetrievalInstructions { get; } = new()
+                {
+                    Name = "VirtoCommerce.Search.AzureSearch.Agentic.KnowledgeBase.RetrievalInstructions",
+                    GroupName = "Search|Azure Search|Agentic",
+                    ValueType = SettingValueType.ShortText,
+                    DefaultValue = "E-commerce catalog assistant. Prioritize retrieval by SKU/code, product name, brand, category and localized description fields. If a SKU is present, treat it as an exact match. Prefer active/in-stock items when available. Ensure retrieved items include key identifiers and product URL when present.",
+                };
+
+                public static SettingDescriptor KnowledgeBaseRetrievalReasoningEffort { get; } = new()
+                {
+                    Name = "VirtoCommerce.Search.AzureSearch.Agentic.KnowledgeBase.RetrievalReasoningEffort",
+                    GroupName = "Search|Azure Search|Agentic",
+                    ValueType = SettingValueType.ShortText,
+                    DefaultValue = "minimal",
+                    AllowedValues = new object[] { "minimal", "low", "medium" },
+                };
+
                 public static SettingDescriptor KnowledgeBaseModel { get; } = new()
                 {
                     Name = "VirtoCommerce.Search.AzureSearch.Agentic.Model",
@@ -163,8 +188,11 @@ namespace VirtoCommerce.AzureSearchModule.Data
                     get
                     {
                         yield return Enabled;
+                        yield return KnowledgeBaseDescription;
                         yield return KnowledgeBaseModel;
                         yield return KnowledgeBaseDeployment;
+                        yield return KnowledgeBaseRetrievalInstructions;
+                        yield return KnowledgeBaseRetrievalReasoningEffort;
                     }
                 }
             }

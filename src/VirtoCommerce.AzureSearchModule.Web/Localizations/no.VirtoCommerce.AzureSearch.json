@@ -16,7 +16,27 @@
         }
       },
       "Semantic": {
+        "Enabled": {
+          "title": "Semantic search enabled",
+          "description": "Enable semantic search features"
+        },
+        "PrimaryLanguage": {
+          "title": "Primary language",
+          "description": "Primary language used for semantic configuration (e.g., en-US, uk-UA)"
+        },
         "Vectorizer": {
+          "EmbeddingModel": {
+            "title": "Embedding model",
+            "description": "Azure OpenAI embedding model name"
+          },
+          "EmbeddingDeployment": {
+            "title": "Embedding deployment",
+            "description": "Azure OpenAI embedding deployment name"
+          },
+          "EmbeddingDimensions": {
+            "title": "Embedding dimensions",
+            "description": "Embedding vector dimensions"
+          },
           "EmbeddingBatchSize": {
             "title": "Embedding batch size",
             "description": "Number of documents per embedding request"
@@ -24,6 +44,10 @@
         }
       },
       "Agentic": {
+        "Enabled": {
+          "title": "Agentic search enabled",
+          "description": "Enable agentic (knowledge base) features"
+        },
         "Model": {
           "title": "Knowledge base model",
           "description": "Azure OpenAI model name for agentic knowledge base"
@@ -31,6 +55,20 @@
         "Deployment": {
           "title": "Knowledge base deployment",
           "description": "Azure OpenAI deployment name for agentic knowledge base"
+        },
+        "KnowledgeBase": {
+          "Description": {
+            "title": "Knowledge base description",
+            "description": "Optional description for the knowledge base resource"
+          },
+          "RetrievalInstructions": {
+            "title": "Retrieval instructions",
+            "description": "Instructions used to guide document retrieval for the knowledge base"
+          },
+          "RetrievalReasoningEffort": {
+            "title": "Retrieval reasoning effort",
+            "description": "Retrieval reasoning effort: minimal, low, or medium"
+          }
         }
       }
     }

@@ -9,6 +9,7 @@ using Azure;
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes;
 using Azure.Search.Documents.Indexes.Models;
+using Azure.Search.Documents.KnowledgeBases.Models;
 using Azure.Search.Documents.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -984,17 +985,63 @@ namespace VirtoCommerce.AzureSearchModule.Data
             var knowledgeSourceName = $"{indexAlias}-knowledge-source".ToLowerInvariant();
             var knowledgeBaseName = $"{indexAlias}-knowledge-base".ToLowerInvariant();
 
-            var indexKnowledgeSource = new SearchIndexKnowledgeSource(
-                name: knowledgeSourceName,
-                searchIndexParameters: new SearchIndexKnowledgeSourceParameters(searchIndexName: indexName)
+            var parameters = new SearchIndexKnowledgeSourceParameters(searchIndexName: indexName);
+
+            // Always include key and semantic content fields.
+            var uniqueFieldNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                AzureSearchHelper.KeyFieldName,
+                semanticContentFieldName,
+                AzureSearchHelper.ToAzureFieldName("sku"),
+            };
+
+            var languageSuffix = NormalizeLanguageSuffix(_settingsManager.GetSemanticPrimaryLanguage());
+            if (!string.IsNullOrWhiteSpace(languageSuffix))
+            {
+                // Include all retrievable fields that end with the selected language suffix, e.g. *_uk_ua.
+                // Exclude embeddings to avoid large vectors / non-retrievable fields.
+                var indexFields = await GetIndexFields(indexName);
+
+                foreach (var field in indexFields)
                 {
-                    SourceDataFields =
+                    if (field?.Name == null)
                     {
-                        new SearchIndexFieldReference(name: AzureSearchHelper.KeyFieldName),
-                        new SearchIndexFieldReference(name: semanticContentFieldName),
+                        continue;
+                    }
+
+                    if (field.IsHidden == true)
+                    {
+                        continue;
+                    }
+
+                    if (field.Name.EndsWith("_embedding", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (field.Name.EndsWith($"_{languageSuffix}", StringComparison.OrdinalIgnoreCase))
+                    {
+                        uniqueFieldNames.Add(field.Name);
                     }
                 }
-            );
+            }
+
+            foreach (var fieldName in uniqueFieldNames.Where(x => !string.IsNullOrWhiteSpace(x)).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            {
+                parameters.SourceDataFields.Add(new SearchIndexFieldReference(name: fieldName));
+            }
+
+            var semanticLanguage = _settingsManager.GetSemanticPrimaryLanguage();
+
+            var indexKnowledgeSource = new SearchIndexKnowledgeSource(
+                name: knowledgeSourceName,
+                searchIndexParameters: parameters
+            )
+            {
+                Description = string.IsNullOrWhiteSpace(semanticLanguage)
+                    ? $"VirtoCommerce agentic knowledge source. DocumentType: {documentType}. Index: {indexName}."
+                    : $"VirtoCommerce agentic knowledge source. DocumentType: {documentType}. Index: {indexName}. Language: {semanticLanguage}.",
+            };
 
             await Client.CreateOrUpdateKnowledgeSourceAsync(indexKnowledgeSource);
 
@@ -1008,16 +1055,48 @@ namespace VirtoCommerce.AzureSearchModule.Data
 
             var model = new KnowledgeBaseAzureOpenAIModel(azureOpenAIParameters: openAiParameters);
 
+            var configuredKnowledgeBaseDescription = _settingsManager.GetAgenticKnowledgeBaseDescription();
+            var configuredRetrievalInstructions = _settingsManager.GetAgenticKnowledgeBaseRetrievalInstructions();
+            var configuredRetrievalReasoningEffort = _settingsManager.GetAgenticKnowledgeBaseRetrievalReasoningEffort();
+
+            KnowledgeRetrievalReasoningEffort retrievalReasoningEffort = configuredRetrievalReasoningEffort switch
+            {
+                "medium" => new KnowledgeRetrievalMediumReasoningEffort(),
+                "low" => new KnowledgeRetrievalLowReasoningEffort(),
+                _ => new KnowledgeRetrievalMinimalReasoningEffort(),
+            };
+
+            var knowledgeBaseDescription = string.IsNullOrWhiteSpace(configuredKnowledgeBaseDescription)
+                ? string.IsNullOrWhiteSpace(semanticLanguage)
+                    ? $"VirtoCommerce agentic knowledge base. DocumentType: {documentType}. Index: {indexName}."
+                    : $"VirtoCommerce agentic knowledge base. DocumentType: {documentType}. Index: {indexName}. Language: {semanticLanguage}."
+                : configuredKnowledgeBaseDescription;
+
             var knowledgeBase = new KnowledgeBase(
                 name: knowledgeBaseName,
                 knowledgeSources: new KnowledgeSourceReference[] { new KnowledgeSourceReference(knowledgeSourceName) }
             )
             {
+                Description = knowledgeBaseDescription,
                 AnswerInstructions = "Provide a two sentence concise and informative answer based on the retrieved documents.",
+                RetrievalInstructions = configuredRetrievalInstructions,
+                RetrievalReasoningEffort = retrievalReasoningEffort,
+                OutputMode = KnowledgeRetrievalOutputMode.ExtractiveData,
                 Models = { model }
             };
 
             await Client.CreateOrUpdateKnowledgeBaseAsync(knowledgeBase);
+        }
+
+        private static string NormalizeLanguageSuffix(string language)
+        {
+            if (string.IsNullOrWhiteSpace(language))
+            {
+                return null;
+            }
+
+            // Normalize values like "uk-UA" -> "uk_ua" to match field naming in Azure index.
+            return language.Trim().ToLowerInvariant().Replace("-", "_");
         }
 
         #endregion
